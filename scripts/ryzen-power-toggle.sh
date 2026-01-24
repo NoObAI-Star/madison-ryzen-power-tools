@@ -7,57 +7,85 @@ SVC_65="ryzenadj-65w.service"
 SVC_75="ryzenadj-75w.service"
 SVC_85="ryzenadj-85w.service"
 
+# ---------------- helpers ----------------
+
 disable_all() {
-  sudo systemctl disable --now "$SVC_65" "$SVC_75" "$SVC_85" >/dev/null 2>&1 || true
+  sudo systemctl disable --now "$SVC_65" >/dev/null 2>&1 || true
+  sudo systemctl disable --now "$SVC_75" >/dev/null 2>&1 || true
+  sudo systemctl disable --now "$SVC_85" >/dev/null 2>&1 || true
 }
 
-enable_one() {
-  local svc="$1"
-  disable_all
-  sudo systemctl enable --now "$svc"
+count_active() {
+  systemctl show -p ActiveState "$SVC_65" "$SVC_75" "$SVC_85" \
+    | grep -c 'ActiveState=active' || true
 }
 
-# Auto-fix if multiple profiles are active before showing UI
-count_active=$(systemctl is-active "$SVC_65" "$SVC_75" "$SVC_85" 2>/dev/null | grep -c '^active$' || true)
-if [ "${count_active:-0}" -gt 1 ]; then
-  zenity --warning --title="$APP_TITLE" --text="More than one profile is active.\n\nFixing now..." || true
+confirm() {
+  zenity --info --title="$APP_TITLE" --text="$1" || true
+}
+
+warn_fixing() {
+  zenity --warning --title="$APP_TITLE" --text="More than one profile was active.\n\nFixing now…" || true
+}
+
+# ---------------- safety check ----------------
+
+ACTIVE_COUNT="$(count_active)"
+
+if [ "$ACTIVE_COUNT" -gt 1 ]; then
+  warn_fixing
   disable_all
 fi
 
-choice=$(zenity --list \
-  --radiolist \
+# ---------------- menu ----------------
+
+CHOICE=$(zenity --list \
   --title="$APP_TITLE" \
   --text="Select CPU power profile:" \
-  --column="Pick" --column="Profile" \
-  TRUE  "75W (Performance)" \
-  FALSE "65W (Cool/Quiet)" \
-  FALSE "85W (Max)" \
-  FALSE "Stock / Normal (Disable caps)" \
-  --width=520 --height=300)
+  --column="Profile" \
+  "Stock (Disable limits)" \
+  "65W (Quiet / Efficient)" \
+  "75W (Balanced)" \
+  "85W (Max Performance)" \
+  --height=300 \
+  --width=400) || exit 0
 
-[ -z "${choice:-}" ] && exit 0
+# ---------------- action ----------------
 
-case "$choice" in
-  "65W (Cool/Quiet)")
-    enable_one "$SVC_65"
-    zenity --info --title="$APP_TITLE" --text="Applied: 65W (Cool/Quiet)" || true
-    ;;
-  "75W (Performance)")
-    enable_one "$SVC_75"
-    zenity --info --title="$APP_TITLE" --text="Applied: 75W (Performance)" || true
-    ;;
-  "85W (Max)")
-    enable_one "$SVC_85"
-    zenity --info --title="$APP_TITLE" --text="Applied: 85W (Max)" || true
-    ;;
-  "Stock / Normal (Disable caps)")
+case "$CHOICE" in
+  "Stock (Disable limits)")
     disable_all
-    zenity --info --title="$APP_TITLE" --text="Applied: Stock / Normal (caps disabled)" || true
+    confirm "CPU power limits disabled.\n\nSystem returned to stock behavior."
     ;;
+
+  "65W (Quiet / Efficient)")
+    disable_all
+    sudo systemctl enable --now "$SVC_65"
+    confirm "65W profile enabled."
+    ;;
+
+  "75W (Balanced)")
+    disable_all
+    sudo systemctl enable --now "$SVC_75"
+    confirm "75W profile enabled."
+    ;;
+
+  "85W (Max Performance)")
+    disable_all
+    sudo systemctl enable --now "$SVC_85"
+    confirm "85W profile enabled."
+    ;;
+
   *)
-    zenity --error --title="$APP_TITLE" --text="Unknown selection: $choice" || true
-    exit 1
+    exit 0
     ;;
 esac
 
-exit 0
+# ---------------- final verification ----------------
+
+FINAL_ACTIVE="$(count_active)"
+
+if [ "$FINAL_ACTIVE" -gt 1 ]; then
+  zenity --error --title="$APP_TITLE" \
+    --text="Unexpected state detected.\n\nMultiple profiles active.\nPlease report this." || true
+fi
